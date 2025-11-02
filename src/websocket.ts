@@ -1,5 +1,6 @@
 import { WebSocket, WebSocketServer } from 'ws';
 import { handleQuery } from './orchestrator';
+import { IncomingQuery } from './types/queryProtocol';
 
 const PORT = 3141;
 
@@ -23,7 +24,13 @@ export function startWebSocketServer() {
           return;
         }
 
-        const response = await handleQuery(parsedMessage.query);
+        const incomingQuery: IncomingQuery = {
+          action: 'incoming_query',
+          query: parsedMessage.query,
+          prompt: parsedMessage.prompt
+        };
+
+        const response = await handleQuery(incomingQuery);
 
         ws.send(JSON.stringify({
           status: 'success',

@@ -1,14 +1,27 @@
-import { DEFAULT_PROMPT } from './prompts';
+import { PROMPT_MODEL_SELECTOR, PROMPTS } from './prompts';
+import type { IncomingQuery, LLMQuery, LLMQueryResponse } from './types/queryProtocol';
 
 const OLLAMA_URL = 'http://localhost:11434/api/generate';
 const MODEL_NAME = 'llama4:scout';
 
-export async function handleQuery(query: string): Promise<string> {
-  console.log(`[orchestrator] Received query: ${query}`);
+export async function handleQuery(request: IncomingQuery): Promise<string> {
+  console.log(`[orchestrator] Received query: ${request.query}`);
 
-  const requestBody = {
+  const llmQuery: LLMQuery = {
+    action: request.action,
     model: MODEL_NAME,
-    prompt: `${DEFAULT_PROMPT}\n\nUser query: ${query}`,
+    prompt: request.prompt || PROMPT_MODEL_SELECTOR,
+    query: request.query
+  };
+  console.log(`[orchestrator] Constructed LLM query: ${JSON.stringify(llmQuery)}`);
+
+  return await callLLM(llmQuery);
+}
+
+async function callLLM(request: LLMQuery): Promise<string> {
+  const requestBody = {
+    model: request.model,
+    prompt: `${request.prompt}\n\nUser query: ${request.query}`,
     stream: false,
     format: 'json'
   };
@@ -29,15 +42,34 @@ export async function handleQuery(query: string): Promise<string> {
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`[orchestrator] Error response body: ${errorText}`);
-      throw new Error(`Ollama API error: ${response.statusText}`);
+      throw new Error(`LLM request failed with status ${response.status}: ${errorText}`);
     }
 
     const data = await response.json();
-    const llmResponse = JSON.parse(data.response);
-    const result = llmResponse.result;
+    console.log(`[orchestrator] Raw response data: ${JSON.stringify(data)}`);
+    const responseData = JSON.parse(data.response) as LLMQueryResponse;
+    console.log(`[orchestrator] LLM response data: ${JSON.stringify(responseData)}`);
 
-    console.log(`[orchestrator] Ollama response: ${result}`);
-    return result;
+    if (!responseData) {
+      throw new Error('Invalid response from LLM');
+    }
+
+    if (responseData.action === 'answer_directly') {
+      return responseData.result;
+    } else {
+      const prompt = responseData.action === 'route_to_prompt' ? PROMPTS.get(responseData.prompt_name) : responseData.custom_prompt;
+      if (!prompt) {
+        throw new Error(`Empty prompt error`);
+      }
+
+      const recQuery:LLMQuery = {
+        action: responseData.action,
+        model: responseData.model,
+        prompt: prompt,
+        query: request.query
+      };
+      return callLLM(recQuery);
+    }
   } catch (error) {
     console.error(`[orchestrator] Error handling query:`, error);
     throw error;
